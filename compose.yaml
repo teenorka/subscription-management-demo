@@ -1,0 +1,15 @@
+services:
+  api:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_PATH: /app/data/subscriptions.db
+    volumes:
+      - subscription-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  subscription-data:
