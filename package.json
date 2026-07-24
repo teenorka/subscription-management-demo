@@ -1,0 +1,27 @@
+{
+  "name": "subscription-management-demo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Production-inspired subscription lifecycle API built with Node.js.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "test": "node --test",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.2.0",
+    "express": "^5.1.0",
+    "zod": "^4.0.14"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.32.0",
+    "eslint": "^9.32.0",
+    "supertest": "^7.1.4"
+  },
+  "license": "MIT"
+}
