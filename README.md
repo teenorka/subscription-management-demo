@@ -17,6 +17,7 @@ The project is based on operational problems found in real subscription products
 - Explicit lifecycle states: `active`, `cancelled`, and `expired`
 - SQLite persistence with WAL mode and foreign-key enforcement
 - Request validation and consistent error responses
+- Structured JSON logs with request correlation IDs
 - Graceful shutdown for container and Linux deployments
 - Automated API lifecycle tests
 - Docker image and Compose setup with persistent storage
@@ -131,6 +132,19 @@ returns the processed subscription without renewing it twice.
 GET /health
 ```
 
+## Request tracing
+
+Every response includes an `X-Request-Id` header. Clients and upstream gateways can
+provide their own safe correlation ID, or the API generates a UUID. Each completed
+request emits one JSON log record:
+
+```json
+{"timestamp":"2026-01-01T00:00:00.000Z","level":"info","message":"request completed","requestId":"gateway-request-001","method":"GET","path":"/health","statusCode":200,"durationMs":1.42}
+```
+
+Only operational metadata is logged. Request bodies, authorization headers,
+webhook signatures, and idempotency keys are intentionally excluded.
+
 ## Architecture
 
 ```text
@@ -167,7 +181,7 @@ The HTTP layer owns transport concerns, while `SubscriptionService` owns lifecyc
 - [x] Idempotency keys for subscription creation
 - [x] Renewal and expiration workflows
 - [x] Payment webhook verification
-- [ ] Structured logging and request correlation IDs
+- [x] Structured logging and request correlation IDs
 - [ ] OpenAPI specification
 - [x] CI checks for linting and tests
 

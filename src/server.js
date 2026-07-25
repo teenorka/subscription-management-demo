@@ -1,17 +1,23 @@
 import { createApp } from './app.js';
 import { loadConfig } from './config.js';
 import { createDatabase } from './database.js';
+import { createLogger } from './logger.js';
 
 const config = loadConfig();
 const database = createDatabase(config.DATABASE_PATH);
-const app = createApp({ database, webhookSecret: config.PAYMENT_WEBHOOK_SECRET });
+const logger = createLogger({ level: config.LOG_LEVEL });
+const app = createApp({
+  database,
+  logger,
+  webhookSecret: config.PAYMENT_WEBHOOK_SECRET,
+});
 
 const server = app.listen(config.PORT, () => {
-  console.info(`Subscription API listening on port ${config.PORT}`);
+  logger.info({ port: config.PORT }, 'server started');
 });
 
 function shutdown(signal) {
-  console.info(`${signal} received, shutting down`);
+  logger.info({ signal }, 'server shutting down');
   server.close(() => {
     database.close();
     process.exit(0);

@@ -13,6 +13,24 @@ function createTestApp(t, clock) {
   return createApp({ database, clock, webhookSecret });
 }
 
+function createTestAppWithLogger(t) {
+  const database = createDatabase(':memory:');
+  const records = [];
+  const logger = {
+    info(fields, message) {
+      records.push({ level: 'info', message, ...fields });
+    },
+    error(fields, message) {
+      records.push({ level: 'error', message, ...fields });
+    },
+  };
+  t.after(() => database.close());
+  return {
+    app: createApp({ database, logger, webhookSecret }),
+    records,
+  };
+}
+
 function signWebhook(payload, timestamp) {
   return `sha256=${createHmac('sha256', webhookSecret)
     .update(`${timestamp}.${payload}`)
@@ -277,4 +295,33 @@ test('rejects a webhook event ID reused with a changed payload', async (t) => {
   }).expect(409);
 
   assert.equal(conflict.body.error.code, 'WEBHOOK_CONFLICT');
+});
+
+test('preserves a valid request ID in the response and structured log', async (t) => {
+  const { app, records } = createTestAppWithLogger(t);
+  const response = await request(app)
+    .get('/health')
+    .set('X-Request-Id', 'gateway-request-001')
+    .expect(200);
+
+  assert.equal(response.headers['x-request-id'], 'gateway-request-001');
+  assert.equal(records.length, 1);
+  assert.equal(records[0].level, 'info');
+  assert.equal(records[0].message, 'request completed');
+  assert.equal(records[0].requestId, 'gateway-request-001');
+  assert.equal(records[0].method, 'GET');
+  assert.equal(records[0].path, '/health');
+  assert.equal(records[0].statusCode, 200);
+  assert.equal(typeof records[0].durationMs, 'number');
+});
+
+test('generates a request ID when the incoming value is unsafe', async (t) => {
+  const { app, records } = createTestAppWithLogger(t);
+  const response = await request(app)
+    .get('/health')
+    .set('X-Request-Id', 'unsafe value with spaces')
+    .expect(200);
+
+  assert.match(response.headers['x-request-id'], /^[0-9a-f-]{36}$/);
+  assert.equal(records[0].requestId, response.headers['x-request-id']);
 });

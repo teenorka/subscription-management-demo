@@ -5,6 +5,7 @@ const schema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
   DATABASE_PATH: z.string().min(1).default('./data/subscriptions.db'),
   PAYMENT_WEBHOOK_SECRET: z.string().min(16).default('development-webhook-secret'),
+  LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
 });
 
 export function loadConfig(environment = process.env) {
