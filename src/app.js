@@ -1,4 +1,5 @@
 import express from 'express';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
   IdempotencyConflictError,
@@ -20,8 +21,14 @@ const paymentEventSchema = z.object({
   type: z.literal('payment.succeeded'),
   data: z.object({ subscriptionId: z.string().uuid() }),
 });
+const requestIdSchema = z.string().min(1).max(128).regex(/^[a-zA-Z0-9._:-]+$/);
 
-export function createApp({ database, clock, webhookSecret = 'development-webhook-secret' }) {
+export function createApp({
+  database,
+  clock,
+  logger = { info() {}, error() {} },
+  webhookSecret = 'development-webhook-secret',
+}) {
   const app = express();
   const subscriptions = new SubscriptionService(database, clock);
   const paymentWebhooks = new PaymentWebhookService({
@@ -32,6 +39,25 @@ export function createApp({ database, clock, webhookSecret = 'development-webhoo
   });
 
   app.disable('x-powered-by');
+  app.use((request, response, next) => {
+    const suppliedRequestId = requestIdSchema.safeParse(request.get('X-Request-Id'));
+    request.requestId = suppliedRequestId.success ? suppliedRequestId.data : randomUUID();
+    response.set('X-Request-Id', request.requestId);
+
+    const startedAt = process.hrtime.bigint();
+    response.on('finish', () => {
+      const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+      logger.info({
+        requestId: request.requestId,
+        method: request.method,
+        path: request.route?.path ?? request.path,
+        statusCode: response.statusCode,
+        durationMs: Number(durationMs.toFixed(2)),
+      }, 'request completed');
+    });
+
+    next();
+  });
   app.use(express.json({
     limit: '16kb',
     verify: (request, _response, buffer) => {
@@ -170,6 +196,17 @@ export function createApp({ database, clock, webhookSecret = 'development-webhoo
   app.use((_request, response) => response.status(404).json({
     error: { code: 'ROUTE_NOT_FOUND', message: 'Route not found' },
   }));
+
+  app.use((error, request, response, _next) => {
+    void _next;
+    logger.error({
+      requestId: request.requestId,
+      errorName: error.name,
+    }, 'request failed');
+    return response.status(500).json({
+      error: { code: 'INTERNAL_ERROR', message: 'Internal server error' },
+    });
+  });
 
   return app;
 }
