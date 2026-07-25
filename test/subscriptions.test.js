@@ -1,13 +1,33 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHmac } from 'node:crypto';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { createDatabase } from '../src/database.js';
 
+const webhookSecret = 'test-webhook-secret';
+
 function createTestApp(t, clock) {
   const database = createDatabase(':memory:');
   t.after(() => database.close());
-  return createApp({ database, clock });
+  return createApp({ database, clock, webhookSecret });
+}
+
+function signWebhook(payload, timestamp) {
+  return `sha256=${createHmac('sha256', webhookSecret)
+    .update(`${timestamp}.${payload}`)
+    .digest('hex')}`;
+}
+
+function sendWebhook(app, { eventId, event, timestamp = '1767225600', signature } = {}) {
+  const payload = JSON.stringify(event);
+  return request(app)
+    .post('/webhooks/payments')
+    .set('Content-Type', 'application/json')
+    .set('X-Webhook-Id', eventId)
+    .set('X-Webhook-Timestamp', timestamp)
+    .set('X-Webhook-Signature', signature ?? signWebhook(payload, timestamp))
+    .send(payload);
 }
 
 test('creates, retrieves, and cancels a subscription', async (t) => {
@@ -161,4 +181,100 @@ test('rejects renewal of a cancelled subscription', async (t) => {
     .expect(409);
 
   assert.equal(renewal.body.error.code, 'INVALID_SUBSCRIPTION_STATE');
+});
+
+test('verifies a payment webhook and renews its subscription', async (t) => {
+  const app = createTestApp(t, () => new Date('2026-01-01T00:00:00.000Z'));
+  const created = await request(app)
+    .post('/api/subscriptions')
+    .set('Idempotency-Key', 'create-before-webhook')
+    .send({ customerId: 'customer-001', plan: 'basic' })
+    .expect(201);
+  const event = {
+    type: 'payment.succeeded',
+    data: { subscriptionId: created.body.data.id },
+  };
+
+  const processed = await sendWebhook(app, {
+    eventId: 'payment-event-001',
+    event,
+  }).expect(200);
+
+  assert.equal(processed.body.data.endsAt, '2026-03-02T00:00:00.000Z');
+  assert.equal(processed.headers['webhook-replayed'], 'false');
+});
+
+test('handles a duplicate payment webhook without renewing twice', async (t) => {
+  const app = createTestApp(t, () => new Date('2026-01-01T00:00:00.000Z'));
+  const created = await request(app)
+    .post('/api/subscriptions')
+    .set('Idempotency-Key', 'create-before-webhook-replay')
+    .send({ customerId: 'customer-001', plan: 'pro' })
+    .expect(201);
+  const input = {
+    eventId: 'payment-event-retried',
+    event: {
+      type: 'payment.succeeded',
+      data: { subscriptionId: created.body.data.id },
+    },
+  };
+
+  const first = await sendWebhook(app, input).expect(200);
+  const replay = await sendWebhook(app, input).expect(200);
+
+  assert.equal(replay.body.data.endsAt, first.body.data.endsAt);
+  assert.equal(replay.headers['webhook-replayed'], 'true');
+});
+
+test('rejects an invalid or stale webhook signature', async (t) => {
+  const app = createTestApp(t, () => new Date('2026-01-01T00:00:00.000Z'));
+  const event = {
+    type: 'payment.succeeded',
+    data: { subscriptionId: '9c2b41b7-b4af-4a26-868f-2dc04d04d767' },
+  };
+
+  const invalid = await sendWebhook(app, {
+    eventId: 'invalid-signature-event',
+    event,
+    signature: `sha256=${'0'.repeat(64)}`,
+  }).expect(401);
+  const stale = await sendWebhook(app, {
+    eventId: 'stale-signature-event',
+    event,
+    timestamp: '1767225000',
+  }).expect(401);
+
+  assert.equal(invalid.body.error.code, 'INVALID_WEBHOOK_SIGNATURE');
+  assert.equal(stale.body.error.code, 'INVALID_WEBHOOK_SIGNATURE');
+});
+
+test('rejects a webhook event ID reused with a changed payload', async (t) => {
+  const app = createTestApp(t, () => new Date('2026-01-01T00:00:00.000Z'));
+  const first = await request(app)
+    .post('/api/subscriptions')
+    .set('Idempotency-Key', 'first-webhook-target')
+    .send({ customerId: 'customer-001', plan: 'basic' })
+    .expect(201);
+  const second = await request(app)
+    .post('/api/subscriptions')
+    .set('Idempotency-Key', 'second-webhook-target')
+    .send({ customerId: 'customer-002', plan: 'basic' })
+    .expect(201);
+
+  await sendWebhook(app, {
+    eventId: 'reused-payment-event',
+    event: {
+      type: 'payment.succeeded',
+      data: { subscriptionId: first.body.data.id },
+    },
+  }).expect(200);
+  const conflict = await sendWebhook(app, {
+    eventId: 'reused-payment-event',
+    event: {
+      type: 'payment.succeeded',
+      data: { subscriptionId: second.body.data.id },
+    },
+  }).expect(409);
+
+  assert.equal(conflict.body.error.code, 'WEBHOOK_CONFLICT');
 });

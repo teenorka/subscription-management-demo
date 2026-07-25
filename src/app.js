@@ -5,19 +5,39 @@ import {
   SubscriptionStateError,
   SubscriptionService,
 } from './subscription-service.js';
+import {
+  InvalidWebhookSignatureError,
+  PaymentWebhookService,
+  WebhookConflictError,
+} from './payment-webhook-service.js';
 
 const createSchema = z.object({
   customerId: z.string().min(1).max(100),
   plan: z.enum(['basic', 'pro']),
 });
 const idempotencyKeySchema = z.string().min(8).max(255);
+const paymentEventSchema = z.object({
+  type: z.literal('payment.succeeded'),
+  data: z.object({ subscriptionId: z.string().uuid() }),
+});
 
-export function createApp({ database, clock }) {
+export function createApp({ database, clock, webhookSecret = 'development-webhook-secret' }) {
   const app = express();
   const subscriptions = new SubscriptionService(database, clock);
+  const paymentWebhooks = new PaymentWebhookService({
+    database,
+    subscriptions,
+    secret: webhookSecret,
+    clock,
+  });
 
   app.disable('x-powered-by');
-  app.use(express.json({ limit: '16kb' }));
+  app.use(express.json({
+    limit: '16kb',
+    verify: (request, _response, buffer) => {
+      request.rawBody = buffer;
+    },
+  }));
 
   app.get('/health', (_request, response) => response.json({ status: 'ok' }));
 
@@ -107,6 +127,44 @@ export function createApp({ database, clock }) {
 
   app.post('/internal/subscriptions/expire', (_request, response) => {
     return response.json({ data: subscriptions.expireDue() });
+  });
+
+  app.post('/webhooks/payments', (request, response) => {
+    const parsedEvent = paymentEventSchema.safeParse(request.body);
+    if (!parsedEvent.success) {
+      return response.status(400).json({
+        error: { code: 'INVALID_EVENT', message: 'Unsupported payment event' },
+      });
+    }
+
+    try {
+      const result = paymentWebhooks.process({
+        eventId: request.get('X-Webhook-Id'),
+        timestamp: request.get('X-Webhook-Timestamp'),
+        signature: request.get('X-Webhook-Signature'),
+        rawBody: request.rawBody,
+        event: parsedEvent.data,
+      });
+      response.set('Webhook-Replayed', String(result.replayed));
+      return response.json({ data: result.subscription });
+    } catch (error) {
+      if (error instanceof InvalidWebhookSignatureError) {
+        return response.status(401).json({
+          error: { code: 'INVALID_WEBHOOK_SIGNATURE', message: error.message },
+        });
+      }
+      if (error instanceof WebhookConflictError) {
+        return response.status(409).json({
+          error: { code: 'WEBHOOK_CONFLICT', message: error.message },
+        });
+      }
+      if (error instanceof SubscriptionStateError) {
+        return response.status(409).json({
+          error: { code: 'INVALID_SUBSCRIPTION_STATE', message: error.message },
+        });
+      }
+      throw error;
+    }
   });
 
   app.use((_request, response) => response.status(404).json({

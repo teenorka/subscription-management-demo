@@ -4,7 +4,7 @@ import { createDatabase } from './database.js';
 
 const config = loadConfig();
 const database = createDatabase(config.DATABASE_PATH);
-const app = createApp({ database });
+const app = createApp({ database, webhookSecret: config.PAYMENT_WEBHOOK_SECRET });
 
 const server = app.listen(config.PORT, () => {
   console.info(`Subscription API listening on port ${config.PORT}`);

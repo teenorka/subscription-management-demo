@@ -44,6 +44,14 @@ export function createDatabase(filename) {
       created_at TEXT NOT NULL,
       FOREIGN KEY (subscription_id) REFERENCES subscriptions(id)
     );
+
+    CREATE TABLE IF NOT EXISTS payment_webhook_events (
+      event_id TEXT PRIMARY KEY,
+      payload_hash TEXT NOT NULL,
+      subscription_id TEXT NOT NULL,
+      processed_at TEXT NOT NULL,
+      FOREIGN KEY (subscription_id) REFERENCES subscriptions(id)
+    );
   `);
 
   return database;

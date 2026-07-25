@@ -10,6 +10,7 @@ The project is based on operational problems found in real subscription products
 
 - Idempotent subscription creation with safe request replay
 - Idempotent renewals that safely handle duplicate payment events
+- HMAC-SHA256 payment webhook verification with replay protection
 - Automatic expiration of due subscriptions
 - Create and retrieve subscriptions through a REST API
 - Basic and Pro plans with server-controlled durations
@@ -103,6 +104,27 @@ POST /internal/subscriptions/expire
 This endpoint is designed to be invoked by a trusted scheduler. It atomically marks
 all due active subscriptions as `expired`.
 
+### Process a payment webhook
+
+```http
+POST /webhooks/payments
+Content-Type: application/json
+X-Webhook-Id: payment-event-001
+X-Webhook-Timestamp: 1767225600
+X-Webhook-Signature: sha256=<hex-digest>
+
+{
+  "type": "payment.succeeded",
+  "data": {
+    "subscriptionId": "9c2b41b7-b4af-4a26-868f-2dc04d04d767"
+  }
+}
+```
+
+The signature is an HMAC-SHA256 digest of `<timestamp>.<raw-request-body>`.
+Requests older than five minutes are rejected. Re-delivering the same event safely
+returns the processed subscription without renewing it twice.
+
 ### Health check
 
 ```http
@@ -131,6 +153,10 @@ The HTTP layer owns transport concerns, while `SubscriptionService` owns lifecyc
 - **SQLite** keeps the example runnable while still demonstrating durable storage, constraints, indexes, and transactions-ready persistence.
 - **Idempotency keys** make client retries safe. Replaying the same request returns the original subscription; reusing a key with a different payload returns `409 Conflict`.
 - **Renewal records** ensure a duplicate payment event never extends access twice.
+- **Signed webhooks** are verified against the unmodified request bytes with a
+  constant-time comparison. A timestamp tolerance limits replay attacks.
+- **Webhook event records** make delivery retries safe and reject an event ID reused
+  with different content.
 - **Expiration is a set-based update** so one scheduler invocation can process all due subscriptions atomically.
 - **UTC ISO 8601 timestamps** avoid dependence on the server's local timezone.
 - **Dependency injection** for the database and service clock makes business behavior testable.
@@ -140,7 +166,7 @@ The HTTP layer owns transport concerns, while `SubscriptionService` owns lifecyc
 
 - [x] Idempotency keys for subscription creation
 - [x] Renewal and expiration workflows
-- [ ] Payment webhook verification
+- [x] Payment webhook verification
 - [ ] Structured logging and request correlation IDs
 - [ ] OpenAPI specification
 - [x] CI checks for linting and tests
