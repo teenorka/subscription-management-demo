@@ -9,6 +9,8 @@ The project is based on operational problems found in real subscription products
 ## Features
 
 - Idempotent subscription creation with safe request replay
+- Idempotent renewals that safely handle duplicate payment events
+- Automatic expiration of due subscriptions
 - Create and retrieve subscriptions through a REST API
 - Basic and Pro plans with server-controlled durations
 - Explicit lifecycle states: `active`, `cancelled`, and `expired`
@@ -82,6 +84,25 @@ GET /api/subscriptions/:id
 POST /api/subscriptions/:id/cancel
 ```
 
+### Renew a subscription
+
+```http
+POST /api/subscriptions/:id/renew
+Idempotency-Key: payment-event-001
+```
+
+Active subscriptions are extended from their current end date. Expired subscriptions
+are reactivated from the current time. Cancelled subscriptions cannot be renewed.
+
+### Run the expiration sweep
+
+```http
+POST /internal/subscriptions/expire
+```
+
+This endpoint is designed to be invoked by a trusted scheduler. It atomically marks
+all due active subscriptions as `expired`.
+
 ### Health check
 
 ```http
@@ -109,6 +130,8 @@ The HTTP layer owns transport concerns, while `SubscriptionService` owns lifecyc
 
 - **SQLite** keeps the example runnable while still demonstrating durable storage, constraints, indexes, and transactions-ready persistence.
 - **Idempotency keys** make client retries safe. Replaying the same request returns the original subscription; reusing a key with a different payload returns `409 Conflict`.
+- **Renewal records** ensure a duplicate payment event never extends access twice.
+- **Expiration is a set-based update** so one scheduler invocation can process all due subscriptions atomically.
 - **UTC ISO 8601 timestamps** avoid dependence on the server's local timezone.
 - **Dependency injection** for the database and service clock makes business behavior testable.
 - **Private production code stays private.** This repository recreates the domain independently and contains no copied commercial logic.
@@ -116,7 +139,7 @@ The HTTP layer owns transport concerns, while `SubscriptionService` owns lifecyc
 ## Roadmap
 
 - [x] Idempotency keys for subscription creation
-- [ ] Renewal and expiration workflows
+- [x] Renewal and expiration workflows
 - [ ] Payment webhook verification
 - [ ] Structured logging and request correlation IDs
 - [ ] OpenAPI specification
