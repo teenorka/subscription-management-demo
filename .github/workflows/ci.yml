@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   quality:
-    name: Lint and test
+    name: Lint, test, and validate API contract
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -37,3 +37,6 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+      - name: Validate OpenAPI contract
+        run: npx --yes @redocly/cli@2.15.0 lint openapi.yaml
