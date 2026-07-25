@@ -17,10 +17,22 @@ export function createDatabase(filename) {
       starts_at TEXT NOT NULL,
       ends_at TEXT NOT NULL,
       created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
+      updated_at TEXT NOT NULL,
+      idempotency_key TEXT
     );
+  `);
+
+  const columns = database.prepare('PRAGMA table_info(subscriptions)').all();
+  if (!columns.some(({ name }) => name === 'idempotency_key')) {
+    database.exec('ALTER TABLE subscriptions ADD COLUMN idempotency_key TEXT');
+  }
+
+  database.exec(`
     CREATE INDEX IF NOT EXISTS idx_subscriptions_customer_id
       ON subscriptions(customer_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_idempotency_key
+      ON subscriptions(idempotency_key)
+      WHERE idempotency_key IS NOT NULL;
   `);
 
   return database;
