@@ -1,0 +1,393 @@
+openapi: 3.1.0
+info:
+  title: Subscription Management API
+  version: 1.0.0
+  description: |
+    A production-inspired API for creating, retrieving, cancelling, renewing,
+    and expiring subscriptions, plus processing signed payment webhooks.
+  license:
+    name: MIT
+    identifier: MIT
+servers:
+  - url: /
+    description: Local development
+security: []
+tags:
+  - name: System
+    description: Service health and operational status.
+  - name: Subscriptions
+    description: Subscription lifecycle operations.
+  - name: Internal
+    description: Operations intended for trusted infrastructure.
+  - name: Webhooks
+    description: Signed inbound events from payment systems.
+paths:
+  /health:
+    get:
+      tags: [System]
+      summary: Check API health
+      operationId: getHealth
+      responses:
+        "200":
+          description: The API is healthy.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+  /api/subscriptions:
+    post:
+      tags: [Subscriptions]
+      summary: Create a subscription
+      description: |
+        Creates a time-limited subscription. Replaying the same request with
+        the same idempotency key returns the original subscription. Reusing
+        the key with different input returns a conflict.
+      operationId: createSubscription
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSubscriptionRequest"
+      responses:
+        "201":
+          description: Subscription created.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionResponse"
+        "200":
+          description: A previous successful request was replayed.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionResponse"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/subscriptions/{id}:
+    get:
+      tags: [Subscriptions]
+      summary: Retrieve a subscription
+      operationId: getSubscription
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/SubscriptionId"
+      responses:
+        "200":
+          description: Subscription found.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/subscriptions/{id}/cancel:
+    post:
+      tags: [Subscriptions]
+      summary: Cancel a subscription
+      operationId: cancelSubscription
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/SubscriptionId"
+      responses:
+        "200":
+          description: Subscription cancelled or already inactive.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/subscriptions/{id}/renew:
+    post:
+      tags: [Subscriptions]
+      summary: Renew a subscription
+      description: |
+        Extends an active subscription from its current end date or reactivates
+        an expired subscription from the current time. Cancelled subscriptions
+        cannot be renewed.
+      operationId: renewSubscription
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/SubscriptionId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Subscription renewed or a previous renewal replayed.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionResponse"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /internal/subscriptions/expire:
+    post:
+      tags: [Internal]
+      summary: Expire all due subscriptions
+      description: Intended for invocation by a trusted scheduler.
+      operationId: expireSubscriptions
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "200":
+          description: Expiration sweep completed.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [expired]
+                    properties:
+                      expired:
+                        type: integer
+                        minimum: 0
+  /webhooks/payments:
+    post:
+      tags: [Webhooks]
+      summary: Process a signed payment event
+      description: |
+        Verifies an HMAC-SHA256 signature over
+        `<timestamp>.<raw-request-body>`. Events older than five minutes are
+        rejected. Re-delivery of the same event is safe.
+      operationId: processPaymentWebhook
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/WebhookId"
+        - $ref: "#/components/parameters/WebhookTimestamp"
+        - $ref: "#/components/parameters/WebhookSignature"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PaymentSucceededEvent"
+      responses:
+        "200":
+          description: Event processed or safely replayed.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+            Webhook-Replayed:
+              description: Whether this event had already been processed.
+              schema:
+                type: boolean
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionResponse"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          description: Signature is missing, invalid, or outside the accepted time window.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          $ref: "#/components/responses/Conflict"
+components:
+  parameters:
+    RequestId:
+      name: X-Request-Id
+      in: header
+      required: false
+      description: Optional client-supplied correlation ID.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: "^[a-zA-Z0-9._:-]+$"
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Unique key used to make retries safe.
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 255
+    SubscriptionId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    WebhookId:
+      name: X-Webhook-Id
+      in: header
+      required: true
+      schema:
+        type: string
+    WebhookTimestamp:
+      name: X-Webhook-Timestamp
+      in: header
+      required: true
+      description: Unix timestamp in seconds.
+      schema:
+        type: string
+        pattern: "^[0-9]+$"
+    WebhookSignature:
+      name: X-Webhook-Signature
+      in: header
+      required: true
+      schema:
+        type: string
+        pattern: "^sha256=[a-f0-9]{64}$"
+  headers:
+    RequestId:
+      description: Correlation ID for the request.
+      schema:
+        type: string
+    IdempotencyReplayed:
+      description: Whether the response came from a previous successful request.
+      schema:
+        type: boolean
+  schemas:
+    CreateSubscriptionRequest:
+      type: object
+      additionalProperties: false
+      required: [customerId, plan]
+      properties:
+        customerId:
+          type: string
+          minLength: 1
+          maxLength: 100
+          example: customer-001
+        plan:
+          type: string
+          enum: [basic, pro]
+    Subscription:
+      type: object
+      required:
+        - id
+        - customerId
+        - plan
+        - status
+        - startsAt
+        - endsAt
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        customerId:
+          type: string
+        plan:
+          type: string
+          enum: [basic, pro]
+        status:
+          type: string
+          enum: [active, cancelled, expired]
+        startsAt:
+          type: string
+          format: date-time
+        endsAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    SubscriptionResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: "#/components/schemas/Subscription"
+    PaymentSucceededEvent:
+      type: object
+      additionalProperties: false
+      required: [type, data]
+      properties:
+        type:
+          type: string
+          const: payment.succeeded
+        data:
+          type: object
+          additionalProperties: false
+          required: [subscriptionId]
+          properties:
+            subscriptionId:
+              type: string
+              format: uuid
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          $ref: "#/components/schemas/Error"
+  responses:
+    InvalidRequest:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: Subscription not found.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Conflict:
+      description: Idempotency, webhook, or subscription-state conflict.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
