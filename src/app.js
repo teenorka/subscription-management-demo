@@ -2,6 +2,7 @@ import express from 'express';
 import { z } from 'zod';
 import {
   IdempotencyConflictError,
+  SubscriptionStateError,
   SubscriptionService,
 } from './subscription-service.js';
 
@@ -11,9 +12,9 @@ const createSchema = z.object({
 });
 const idempotencyKeySchema = z.string().min(8).max(255);
 
-export function createApp({ database }) {
+export function createApp({ database, clock }) {
   const app = express();
-  const subscriptions = new SubscriptionService(database);
+  const subscriptions = new SubscriptionService(database, clock);
 
   app.disable('x-powered-by');
   app.use(express.json({ limit: '16kb' }));
@@ -67,6 +68,45 @@ export function createApp({ database }) {
       });
     }
     return response.json({ data: subscription });
+  });
+
+  app.post('/api/subscriptions/:id/renew', (request, response) => {
+    const parsedKey = idempotencyKeySchema.safeParse(request.get('Idempotency-Key'));
+    if (!parsedKey.success) {
+      return response.status(400).json({
+        error: {
+          code: 'INVALID_REQUEST',
+          message: 'A valid Idempotency-Key header is required',
+        },
+      });
+    }
+
+    try {
+      const result = subscriptions.renew(request.params.id, parsedKey.data);
+      if (!result) {
+        return response.status(404).json({
+          error: { code: 'NOT_FOUND', message: 'Subscription not found' },
+        });
+      }
+      response.set('Idempotency-Replayed', String(!result.renewed));
+      return response.json({ data: result.subscription });
+    } catch (error) {
+      if (error instanceof IdempotencyConflictError) {
+        return response.status(409).json({
+          error: { code: 'IDEMPOTENCY_CONFLICT', message: error.message },
+        });
+      }
+      if (error instanceof SubscriptionStateError) {
+        return response.status(409).json({
+          error: { code: 'INVALID_SUBSCRIPTION_STATE', message: error.message },
+        });
+      }
+      throw error;
+    }
+  });
+
+  app.post('/internal/subscriptions/expire', (_request, response) => {
+    return response.json({ data: subscriptions.expireDue() });
   });
 
   app.use((_request, response) => response.status(404).json({
