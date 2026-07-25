@@ -1,5 +1,7 @@
 # Subscription Management Demo
 
+[![CI](https://github.com/teenorka/subscription-management-demo/actions/workflows/ci.yml/badge.svg)](https://github.com/teenorka/subscription-management-demo/actions/workflows/ci.yml)
+
 A production-inspired Node.js backend that demonstrates the core lifecycle of a subscription service without exposing commercial source code, credentials, or user data.
 
 The project is based on operational problems found in real subscription products: creating time-limited access, persisting state, validating input, cancelling subscriptions, and running the service predictably in a container.
@@ -115,7 +117,7 @@ The HTTP layer owns transport concerns, while `SubscriptionService` owns lifecyc
 - [ ] Payment webhook verification
 - [ ] Structured logging and request correlation IDs
 - [ ] OpenAPI specification
-- [ ] CI checks for linting and tests
+- [x] CI checks for linting and tests
 
 ## License
 
