@@ -1,11 +1,15 @@
 import express from 'express';
 import { z } from 'zod';
-import { SubscriptionService } from './subscription-service.js';
+import {
+  IdempotencyConflictError,
+  SubscriptionService,
+} from './subscription-service.js';
 
 const createSchema = z.object({
   customerId: z.string().min(1).max(100),
   plan: z.enum(['basic', 'pro']),
 });
+const idempotencyKeySchema = z.string().min(8).max(255);
 
 export function createApp({ database }) {
   const app = express();
@@ -17,14 +21,32 @@ export function createApp({ database }) {
   app.get('/health', (_request, response) => response.json({ status: 'ok' }));
 
   app.post('/api/subscriptions', (request, response) => {
-    const parsed = createSchema.safeParse(request.body);
-    if (!parsed.success) {
+    const parsedBody = createSchema.safeParse(request.body);
+    const parsedKey = idempotencyKeySchema.safeParse(request.get('Idempotency-Key'));
+    if (!parsedBody.success || !parsedKey.success) {
       return response.status(400).json({
-        error: { code: 'INVALID_REQUEST', message: 'Request body is invalid' },
+        error: {
+          code: 'INVALID_REQUEST',
+          message: 'A valid request body and Idempotency-Key header are required',
+        },
       });
     }
 
-    return response.status(201).json({ data: subscriptions.create(parsed.data) });
+    try {
+      const result = subscriptions.create({
+        ...parsedBody.data,
+        idempotencyKey: parsedKey.data,
+      });
+      response.set('Idempotency-Replayed', String(!result.created));
+      return response.status(result.created ? 201 : 200).json({ data: result.subscription });
+    } catch (error) {
+      if (error instanceof IdempotencyConflictError) {
+        return response.status(409).json({
+          error: { code: 'IDEMPOTENCY_CONFLICT', message: error.message },
+        });
+      }
+      throw error;
+    }
   });
 
   app.get('/api/subscriptions/:id', (request, response) => {
