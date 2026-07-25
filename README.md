@@ -8,6 +8,7 @@ The project is based on operational problems found in real subscription products
 
 ## Features
 
+- Idempotent subscription creation with safe request replay
 - Create and retrieve subscriptions through a REST API
 - Basic and Pro plans with server-controlled durations
 - Explicit lifecycle states: `active`, `cancelled`, and `expired`
@@ -61,6 +62,7 @@ SQLite data is stored in the named `subscription-data` volume.
 ```http
 POST /api/subscriptions
 Content-Type: application/json
+Idempotency-Key: create-customer-001-basic
 
 {
   "customerId": "customer-001",
@@ -101,18 +103,19 @@ Subscription service ── lifecycle rules
 SQLite database ─────── durable state
 ```
 
-The HTTP layer owns transport concerns, while `SubscriptionService` owns lifecycle rules. Database initialization is isolated so tests can use an in-memory database without changing application code.
+The HTTP layer owns transport concerns, while `SubscriptionService` owns lifecycle and idempotency rules. Database initialization is isolated so tests can use an in-memory database without changing application code.
 
 ## Design decisions
 
 - **SQLite** keeps the example runnable while still demonstrating durable storage, constraints, indexes, and transactions-ready persistence.
+- **Idempotency keys** make client retries safe. Replaying the same request returns the original subscription; reusing a key with a different payload returns `409 Conflict`.
 - **UTC ISO 8601 timestamps** avoid dependence on the server's local timezone.
 - **Dependency injection** for the database and service clock makes business behavior testable.
 - **Private production code stays private.** This repository recreates the domain independently and contains no copied commercial logic.
 
 ## Roadmap
 
-- [ ] Idempotency keys for subscription creation
+- [x] Idempotency keys for subscription creation
 - [ ] Renewal and expiration workflows
 - [ ] Payment webhook verification
 - [ ] Structured logging and request correlation IDs
