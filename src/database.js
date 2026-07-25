@@ -30,9 +30,20 @@ export function createDatabase(filename) {
   database.exec(`
     CREATE INDEX IF NOT EXISTS idx_subscriptions_customer_id
       ON subscriptions(customer_id);
+    CREATE INDEX IF NOT EXISTS idx_subscriptions_expiration
+      ON subscriptions(status, ends_at);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_idempotency_key
       ON subscriptions(idempotency_key)
       WHERE idempotency_key IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS subscription_renewals (
+      idempotency_key TEXT PRIMARY KEY,
+      subscription_id TEXT NOT NULL,
+      previous_ends_at TEXT NOT NULL,
+      renewed_ends_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (subscription_id) REFERENCES subscriptions(id)
+    );
   `);
 
   return database;
